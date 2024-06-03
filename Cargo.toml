@@ -1,0 +1,8 @@
+[package]
+name = "mini-bitcask"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+log = "0.4.21"
+fs4 = "0.8.3"
