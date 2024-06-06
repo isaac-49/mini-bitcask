@@ -1,8 +1,7 @@
 use fs4::FileExt;
-use log::LevelFilter::Error;
+use std::collections::{btree_map, Bound};
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
-use std::{path, u64};
 
 const KEY_VAL_HEADER_LEN: u32 = 4;
 const MERGE_FILE_EXT: &str = "merge";
@@ -87,6 +86,26 @@ impl MiniBitcask {
     // 刷新写入
     fn flush(&mut self) -> IoResult<()> {
         Ok(self.log.file.sync_all()?)
+    }
+
+    pub fn scan(&mut self, range: impl std::ops::RangeBounds<Vec<u8>>) -> ScanIterator<'_> {
+        ScanIterator {
+            inner: self.keydir.range(range),
+            log: &mut self.log,
+        }
+    }
+
+    pub fn scan_prefix(&mut self, prefix: &[u8]) -> ScanIterator<'_> {
+        let start = Bound::Included(prefix.to_vec());
+
+        // 最后一位加一，例如原始前缀是 "aaaa"，变为 "aaab"
+        let mut bound_prefix = prefix.to_vec().clone();
+        if let Some(last) = bound_prefix.iter_mut().last() {
+            *last += 1;
+        };
+        let end = Bound::Excluded(bound_prefix.to_vec());
+
+        self.scan((start, end))
     }
 }
 
@@ -198,5 +217,32 @@ impl Log {
         }
         w.flush()?;
         Ok((offset, len))
+    }
+}
+
+/// 迭代器实现
+pub struct ScanIterator<'a> {
+    inner: btree_map::Range<'a, Vec<u8>, (u64, u32)>,
+    log: &'a mut Log,
+}
+impl<'a> ScanIterator<'a> {
+    fn map(&mut self, item: (&Vec<u8>, &(u64, u32))) -> <Self as Iterator>::Item {
+        let (key, (value_pos, value_len)) = item;
+        let value = self.log.read_value(*value_pos, *value_len)?;
+        Ok((key.clone(), value))
+    }
+}
+
+impl<'a> Iterator for ScanIterator<'a> {
+    type Item = IoResult<(Vec<u8>, Vec<u8>)>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|item| self.map(item))
+    }
+}
+
+impl<'a> DoubleEndedIterator for ScanIterator<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.inner.next_back().map(|item| self.map(item))
     }
 }
